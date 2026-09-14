@@ -49,6 +49,17 @@ function initDatabase() {
       )
     `);
 
+    // Tabela de hierarquia
+    db.run(`
+      CREATE TABLE IF NOT EXISTS hierarquia (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rg INTEGER UNIQUE NOT NULL,
+        nome TEXT NOT NULL,
+        patente TEXT NOT NULL,
+        criado_em DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     // Tabela de relatórios
     db.run(`
       CREATE TABLE IF NOT EXISTS relatorios (
@@ -60,12 +71,15 @@ function initDatabase() {
         prisoes INTEGER DEFAULT 0,
         multas INTEGER DEFAULT 0,
         notas TEXT,
+        comandante_rg INTEGER,
+        comandante_nome TEXT,
         status TEXT DEFAULT 'pendente',
         aprovado_por INTEGER,
         data_aprovacao DATETIME,
         criado_em DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(usuario_id) REFERENCES usuarios(id),
-        FOREIGN KEY(aprovado_por) REFERENCES usuarios(id)
+        FOREIGN KEY(aprovado_por) REFERENCES usuarios(id),
+        FOREIGN KEY(comandante_rg) REFERENCES hierarquia(rg)
       )
     `);
 
@@ -78,6 +92,24 @@ function initDatabase() {
           VALUES (?, ?, ?, ?, ?)
         `, ['admin', hashedPassword, 'Administrador', 'Admin', 'admin']);
         console.log('✅ Admin padrão criado: admin / admin123');
+      }
+    });
+
+    // Inserir hierarquia padrão
+    db.run(`SELECT COUNT(*) as count FROM hierarquia`, (err, row) => {
+      if (row.count === 0) {
+        const hierarquiaInicial = [
+          { rg: 298, nome: 'Tenente Coronel', patente: 'Tenente Coronel' },
+          { rg: 5828, nome: 'Major Gusttavo Kallis', patente: 'Major' }
+        ];
+
+        hierarquiaInicial.forEach(h => {
+          db.run(`
+            INSERT INTO hierarquia (rg, nome, patente)
+            VALUES (?, ?, ?)
+          `, [h.rg, h.nome, h.patente]);
+        });
+        console.log('✅ Hierarquia padrão criada');
       }
     });
   });
@@ -128,22 +160,131 @@ app.get('/api/usuario', (req, res) => {
   }
 });
 
+// ========== ROTAS DE HIERARQUIA ==========
+
+// Listar hierarquia
+app.get('/api/hierarquia', (req, res) => {
+  db.all(`SELECT * FROM hierarquia ORDER BY rg ASC`, (err, rows) => {
+    if (err) {
+      return res.status(500).json({ erro: 'Erro ao buscar hierarquia' });
+    }
+    res.json(rows || []);
+  });
+});
+
+// Buscar agente por RG
+app.get('/api/hierarquia/:rg', (req, res) => {
+  const rg = req.params.rg;
+  db.get(`SELECT * FROM hierarquia WHERE rg = ?`, [rg], (err, row) => {
+    if (err) {
+      return res.status(500).json({ erro: 'Erro ao buscar agente' });
+    }
+    if (!row) {
+      return res.status(404).json({ erro: 'Agente não encontrado' });
+    }
+    res.json(row);
+  });
+});
+
+// Criar agente na hierarquia (admin)
+app.post('/api/hierarquia', (req, res) => {
+  if (!req.session.usuario || req.session.usuario.tipo !== 'admin') {
+    return res.status(403).json({ erro: 'Acesso negado' });
+  }
+
+  const { rg, nome, patente } = req.body;
+
+  if (!rg || !nome || !patente) {
+    return res.status(400).json({ erro: 'Campos obrigatórios: rg, nome, patente' });
+  }
+
+  db.run(`
+    INSERT INTO hierarquia (rg, nome, patente)
+    VALUES (?, ?, ?)
+  `, [rg, nome, patente], function(err) {
+    if (err) {
+      if (err.message.includes('UNIQUE')) {
+        return res.status(400).json({ erro: 'RG já existe' });
+      }
+      return res.status(500).json({ erro: 'Erro ao criar agente' });
+    }
+    res.json({ sucesso: true, id: this.lastID });
+  });
+});
+
+// Atualizar agente na hierarquia (admin)
+app.put('/api/hierarquia/:id', (req, res) => {
+  if (!req.session.usuario || req.session.usuario.tipo !== 'admin') {
+    return res.status(403).json({ erro: 'Acesso negado' });
+  }
+
+  const { nome, patente } = req.body;
+  const id = req.params.id;
+
+  db.run(`
+    UPDATE hierarquia
+    SET nome = ?, patente = ?
+    WHERE id = ?
+  `, [nome, patente, id], function(err) {
+    if (err) {
+      return res.status(500).json({ erro: 'Erro ao atualizar agente' });
+    }
+    res.json({ sucesso: true });
+  });
+});
+
+// Deletar agente da hierarquia (admin)
+app.delete('/api/hierarquia/:id', (req, res) => {
+  if (!req.session.usuario || req.session.usuario.tipo !== 'admin') {
+    return res.status(403).json({ erro: 'Acesso negado' });
+  }
+
+  const id = req.params.id;
+
+  db.run(`DELETE FROM hierarquia WHERE id = ?`, [id], function(err) {
+    if (err) {
+      return res.status(500).json({ erro: 'Erro ao deletar agente' });
+    }
+    res.json({ sucesso: true });
+  });
+});
+
+// ========== ROTAS DE RELATÓRIOS ==========
+
 // Criar relatório
 app.post('/api/relatorios', (req, res) => {
   if (!req.session.usuario) {
     return res.status(401).json({ erro: 'Não autenticado' });
   }
 
-  const { data_inicio, data_fim, apreensoes, prisoes, multas, notas } = req.body;
+  const { data_inicio, data_fim, apreensoes, prisoes, multas, notas, comandante_rg } = req.body;
 
-  db.run(`
-    INSERT INTO relatorios (usuario_id, data_inicio, data_fim, apreensoes, prisoes, multas, notas, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'pendente')
-  `, [req.session.usuario.id, data_inicio, data_fim, apreensoes, prisoes, multas, notas], function(err) {
+  // Se tem RG do comandante, busca o nome
+  let query = `
+    INSERT INTO relatorios (usuario_id, data_inicio, data_fim, apreensoes, prisoes, multas, notas, comandante_rg, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pendente')
+  `;
+  let params = [req.session.usuario.id, data_inicio, data_fim, apreensoes, prisoes, multas, notas, comandante_rg || null];
+
+  db.run(query, params, function(err) {
     if (err) {
       return res.status(500).json({ erro: 'Erro ao salvar relatório' });
     }
-    res.json({ sucesso: true, id: this.lastID });
+
+    // Se tem RG, busca o nome do comandante
+    if (comandante_rg) {
+      db.get(`SELECT nome FROM hierarquia WHERE rg = ?`, [comandante_rg], (err, row) => {
+        if (row) {
+          db.run(`UPDATE relatorios SET comandante_nome = ? WHERE id = ?`, [row.nome, this.lastID], () => {
+            res.json({ sucesso: true, id: this.lastID });
+          });
+        } else {
+          res.json({ sucesso: true, id: this.lastID });
+        }
+      });
+    } else {
+      res.json({ sucesso: true, id: this.lastID });
+    }
   });
 });
 
