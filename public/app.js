@@ -1,5 +1,6 @@
 // Gerenciamento de estado e navegação
 let usuarioLogado = null;
+let hierarquiaCache = [];
 
 // Inicializar app
 document.addEventListener('DOMContentLoaded', () => {
@@ -12,6 +13,7 @@ async function verificarLogin() {
         const response = await fetch('/api/usuario');
         if (response.ok) {
             usuarioLogado = await response.json();
+            carregarHierarquia(); // Carregar hierarquia ao iniciar
             mostrarApp();
         } else {
             mostrarLogin();
@@ -19,6 +21,16 @@ async function verificarLogin() {
     } catch (error) {
         console.error('Erro ao verificar login:', error);
         mostrarLogin();
+    }
+}
+
+// Carregar hierarquia para o cache
+async function carregarHierarquia() {
+    try {
+        const response = await fetch('/api/hierarquia');
+        hierarquiaCache = await response.json();
+    } catch (error) {
+        console.error('Erro ao carregar hierarquia:', error);
     }
 }
 
@@ -63,6 +75,7 @@ async function fazerLogin(event) {
         
         if (response.ok) {
             usuarioLogado = await response.json().then(r => r.usuario);
+            carregarHierarquia();
             mostrarApp();
         } else {
             const erro = await response.json();
@@ -95,8 +108,8 @@ function mostrarApp() {
                         <li><a href="#" onclick="irPara('ranking', event)" class="menu-link" data-page="ranking">
                             <span>📈</span> Ranking
                         </a></li>
-                        <li><a href="#" onclick="irPara('agentes', event)" class="menu-link" data-page="agentes">
-                            <span>👮</span> Agentes
+                        <li><a href="#" onclick="irPara('hierarquia', event)" class="menu-link" data-page="hierarquia">
+                            <span>🎖️</span> Hierarquia
                         </a></li>
                     ` : `
                         <li><a href="#" onclick="irPara('meus-relatorios', event)" class="menu-link" data-page="meus-relatorios">
@@ -104,6 +117,9 @@ function mostrarApp() {
                         </a></li>
                         <li><a href="#" onclick="irPara('novo-relatorio', event)" class="menu-link" data-page="novo-relatorio">
                             <span>➕</span> Novo Relatório
+                        </a></li>
+                        <li><a href="#" onclick="irPara('hierarquia', event)" class="menu-link" data-page="hierarquia">
+                            <span>🎖️</span> Hierarquia
                         </a></li>
                     `}
                     <li><a href="#" onclick="irPara('regras', event)" class="menu-link" data-page="regras">
@@ -141,7 +157,7 @@ function mostrarApp() {
                     </div>
                     <div id="relatorios" class="page"></div>
                     <div id="ranking" class="page"></div>
-                    <div id="agentes" class="page"></div>
+                    <div id="hierarquia" class="page"></div>
                     <div id="meus-relatorios" class="page"></div>
                     <div id="novo-relatorio" class="page"></div>
                     <div id="regras" class="page"></div>
@@ -174,6 +190,9 @@ function irPara(pagina, event) {
             break;
         case 'ranking':
             carregarRanking();
+            break;
+        case 'hierarquia':
+            carregarHierarquiaPage();
             break;
         case 'meus-relatorios':
             carregarMeusRelatorios();
@@ -239,8 +258,225 @@ function pagina_dashboard_agente() {
     `;
 }
 
+// ========== HIERARQUIA ==========
+
+// Carregar e exibir hierarquia
+async function carregarHierarquiaPage() {
+    const container = document.getElementById('hierarquia');
+    const isAdmin = usuarioLogado.tipo === 'admin';
+    
+    try {
+        const response = await fetch('/api/hierarquia');
+        const hierarquia = await response.json();
+        
+        let html = `
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">🎖️ Hierarquia da Corporação</h3>
+                    ${isAdmin ? `<button class="btn btn-primary" onclick="mostrarFormularioNovoAgente()">➕ Adicionar Agente</button>` : ''}
+                </div>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>RG</th>
+                            <th>Nome</th>
+                            <th>Patente</th>
+                            ${isAdmin ? '<th>Ações</th>' : ''}
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        hierarquia.forEach(agente => {
+            html += `
+                <tr>
+                    <td><strong>${agente.rg}</strong></td>
+                    <td>${agente.nome}</td>
+                    <td><span style="color: var(--gold);">${agente.patente}</span></td>
+                    ${isAdmin ? `
+                        <td>
+                            <button class="btn btn-small" onclick="editarAgente(${agente.id}, '${agente.rg}', '${agente.nome}', '${agente.patente}')">✏️ Editar</button>
+                            <button class="btn btn-danger btn-small" onclick="deletarAgente(${agente.id})">🗑️ Deletar</button>
+                        </td>
+                    ` : ''}
+                </tr>
+            `;
+        });
+        
+        html += `
+                    </tbody>
+                </table>
+            </div>
+            <div id="formulario-agente" style="display: none;"></div>
+        `;
+        
+        container.innerHTML = html;
+    } catch (error) {
+        container.innerHTML = '<p style="color: red;">Erro ao carregar hierarquia</p>';
+    }
+}
+
+// Mostrar formulário para novo agente
+function mostrarFormularioNovoAgente() {
+    const html = `
+        <div class="card" style="margin-top: 20px;">
+            <div class="card-header">
+                <h3 class="card-title">➕ Novo Agente</h3>
+            </div>
+            <form onsubmit="salvarNovoAgente(event)">
+                <div class="form-group">
+                    <label>RG</label>
+                    <input type="number" id="novo-rg" required>
+                </div>
+                <div class="form-group">
+                    <label>Nome</label>
+                    <input type="text" id="novo-nome" required>
+                </div>
+                <div class="form-group">
+                    <label>Patente</label>
+                    <select id="novo-patente" required>
+                        <option value="">Selecione uma patente</option>
+                        <option value="Policial">Policial</option>
+                        <option value="Sargento">Sargento</option>
+                        <option value="Tenente">Tenente</option>
+                        <option value="Capitão">Capitão</option>
+                        <option value="Major">Major</option>
+                        <option value="Tenente Coronel">Tenente Coronel</option>
+                        <option value="Coronel">Coronel</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-success">✓ Salvar</button>
+                <button type="button" class="btn btn-secondary" onclick="carregarHierarquiaPage()">✕ Cancelar</button>
+            </form>
+        </div>
+    `;
+    
+    document.getElementById('formulario-agente').innerHTML = html;
+    document.getElementById('formulario-agente').style.display = 'block';
+}
+
+// Salvar novo agente
+async function salvarNovoAgente(event) {
+    event.preventDefault();
+    
+    const rg = document.getElementById('novo-rg').value;
+    const nome = document.getElementById('novo-nome').value;
+    const patente = document.getElementById('novo-patente').value;
+    
+    try {
+        const response = await fetch('/api/hierarquia', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rg, nome, patente })
+        });
+        
+        if (response.ok) {
+            alert('Agente criado com sucesso!');
+            await carregarHierarquia();
+            carregarHierarquiaPage();
+        } else {
+            const erro = await response.json();
+            alert(erro.erro || 'Erro ao criar agente');
+        }
+    } catch (error) {
+        alert('Erro na conexão');
+    }
+}
+
+// Editar agente
+function editarAgente(id, rg, nome, patente) {
+    const html = `
+        <div class="card" style="margin-top: 20px;">
+            <div class="card-header">
+                <h3 class="card-title">✏️ Editar Agente</h3>
+            </div>
+            <form onsubmit="salvarEdicaoAgente(event, ${id})">
+                <div class="form-group">
+                    <label>RG</label>
+                    <input type="number" value="${rg}" disabled>
+                </div>
+                <div class="form-group">
+                    <label>Nome</label>
+                    <input type="text" id="edit-nome" value="${nome}" required>
+                </div>
+                <div class="form-group">
+                    <label>Patente</label>
+                    <select id="edit-patente" required>
+                        <option value="Policial" ${patente === 'Policial' ? 'selected' : ''}>Policial</option>
+                        <option value="Sargento" ${patente === 'Sargento' ? 'selected' : ''}>Sargento</option>
+                        <option value="Tenente" ${patente === 'Tenente' ? 'selected' : ''}>Tenente</option>
+                        <option value="Capitão" ${patente === 'Capitão' ? 'selected' : ''}>Capitão</option>
+                        <option value="Major" ${patente === 'Major' ? 'selected' : ''}>Major</option>
+                        <option value="Tenente Coronel" ${patente === 'Tenente Coronel' ? 'selected' : ''}>Tenente Coronel</option>
+                        <option value="Coronel" ${patente === 'Coronel' ? 'selected' : ''}>Coronel</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-success">✓ Salvar</button>
+                <button type="button" class="btn btn-secondary" onclick="carregarHierarquiaPage()">✕ Cancelar</button>
+            </form>
+        </div>
+    `;
+    
+    document.getElementById('formulario-agente').innerHTML = html;
+    document.getElementById('formulario-agente').style.display = 'block';
+}
+
+// Salvar edição de agente
+async function salvarEdicaoAgente(event, id) {
+    event.preventDefault();
+    
+    const nome = document.getElementById('edit-nome').value;
+    const patente = document.getElementById('edit-patente').value;
+    
+    try {
+        const response = await fetch(`/api/hierarquia/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ nome, patente })
+        });
+        
+        if (response.ok) {
+            alert('Agente atualizado com sucesso!');
+            await carregarHierarquia();
+            carregarHierarquiaPage();
+        } else {
+            alert('Erro ao atualizar agente');
+        }
+    } catch (error) {
+        alert('Erro na conexão');
+    }
+}
+
+// Deletar agente
+async function deletarAgente(id) {
+    if (!confirm('Deseja deletar este agente?')) return;
+    
+    try {
+        const response = await fetch(`/api/hierarquia/${id}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            alert('Agente deletado com sucesso!');
+            await carregarHierarquia();
+            carregarHierarquiaPage();
+        } else {
+            alert('Erro ao deletar agente');
+        }
+    } catch (error) {
+        alert('Erro na conexão');
+    }
+}
+
+// ========== RELATÓRIOS ==========
+
 // Formulário de novo relatório
 function formulario_novo_relatorio() {
+    let opcoesComandate = '<option value="">-- Selecione um comandante --</option>';
+    hierarquiaCache.forEach(agente => {
+        opcoesComandate += `<option value="${agente.rg}">${agente.rg} - ${agente.nome} (${agente.patente})</option>`;
+    });
+    
     return `
         <div class="card">
             <div class="card-header">
@@ -256,6 +492,12 @@ function formulario_novo_relatorio() {
                     <input type="datetime-local" id="data_fim" required>
                 </div>
                 <div class="form-group">
+                    <label>Comandante (RG)</label>
+                    <select id="comandante_rg">
+                        ${opcoesComandate}
+                    </select>
+                </div>
+                <div class="form-group">
                     <label>Apreensões</label>
                     <input type="text" id="apreensoes" placeholder="Ex: 2 kg maconha, 1 pistola">
                 </div>
@@ -269,7 +511,7 @@ function formulario_novo_relatorio() {
                 </div>
                 <div class="form-group">
                     <label>Notas</label>
-                    <textarea id="notas" style="width: 100%; min-height: 100px; padding: 10px; border: 1px solid var(--border-color); background-color: var(--bg-darker); color: var(--text-primary); border-radius: 6px;"></textarea>
+                    <textarea id="notas" style="width: 100%; min-height: 100px; padding: 10px; border: 1px solid var(--border-color); background-color: var(--bg-darker); color: var(--text-primary); border-radius: 5px;"></textarea>
                 </div>
                 <button type="submit" class="btn btn-primary">Enviar Relatório</button>
             </form>
@@ -287,7 +529,8 @@ async function salvarRelatorio(event) {
         apreensoes: document.getElementById('apreensoes').value,
         prisoes: parseInt(document.getElementById('prisoes').value),
         multas: parseInt(document.getElementById('multas').value),
-        notas: document.getElementById('notas').value
+        notas: document.getElementById('notas').value,
+        comandante_rg: document.getElementById('comandante_rg').value ? parseInt(document.getElementById('comandante_rg').value) : null
     };
     
     try {
@@ -317,12 +560,13 @@ async function carregarRelatorios() {
         const relatorios = await response.json();
         
         let html = '<div class="card"><div class="card-header"><h3>Todos os Relatórios</h3></div>';
-        html += '<table><thead><tr><th>Agente</th><th>Data Início</th><th>Apreensões</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
+        html += '<table><thead><tr><th>Agente</th><th>Data</th><th>Comandante</th><th>Apreensões</th><th>Status</th><th>Ações</th></tr></thead><tbody>';
         
         relatorios.forEach(rel => {
             html += `<tr>
                 <td>${rel.usuario_nome}</td>
                 <td>${new Date(rel.data_inicio).toLocaleDateString('pt-BR')}</td>
+                <td>${rel.comandante_nome ? `${rel.comandante_nome} (RG: ${rel.comandante_rg})` : '-'}</td>
                 <td>${rel.apreensoes || '-'}</td>
                 <td><span class="badge badge-${rel.status}">${rel.status}</span></td>
                 <td>
@@ -350,11 +594,12 @@ async function carregarMeusRelatorios() {
         const relatorios = await response.json();
         
         let html = '<div class="card"><div class="card-header"><h3>Meus Relatórios</h3></div>';
-        html += '<table><thead><tr><th>Data Início</th><th>Apreensões</th><th>Status</th></tr></thead><tbody>';
+        html += '<table><thead><tr><th>Data</th><th>Comandante</th><th>Apreensões</th><th>Status</th></tr></thead><tbody>';
         
         relatorios.forEach(rel => {
             html += `<tr>
                 <td>${new Date(rel.data_inicio).toLocaleDateString('pt-BR')}</td>
+                <td>${rel.comandante_nome ? `${rel.comandante_nome} (RG: ${rel.comandante_rg})` : '-'}</td>
                 <td>${rel.apreensoes || '-'}</td>
                 <td><span class="badge badge-${rel.status}">${rel.status}</span></td>
             </tr>`;
